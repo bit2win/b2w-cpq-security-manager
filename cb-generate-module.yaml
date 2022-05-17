@@ -1,0 +1,131 @@
+# cloud-build-local --config=cb-generate-module.yaml --dryrun=false --substitutions=BRANCH_NAME=internal-dev --push .
+
+steps:
+  - name: eu.gcr.io/b2w-master/b2w-cb:dev
+    entrypoint: /bin/bash
+    args:
+      - '-c'
+      - |
+        set -e
+
+        echo export REPOSITORY=b2w-pypi > /workspace/variables
+        echo export PROJECT=b2w-master >> /workspace/variables
+        echo export ZONE=europe-west1 >> /workspace/variables
+
+        declare -A _CDN=([internal-dev]="cdn-int-dev.bit2win.cloud" [internal-test]="cdn-int-test.bit2win.cloud" [internal-prod]="cdn-int-prod.bit2win.cloud" [preview-hotfix]="cdn-preview-hotfix.bit2win.cloud" [hotfix]="cdn-hotfix.bit2win.cloud" [costomer-prod]="cdn.bit2win.cloud")
+        export CDN="https://$${_CDN[$BRANCH_NAME]}"
+
+        declare -A _RELEASE_BRANCH=([internal-dev]="internal-dev" [internal-test]="internal-dev" [internal-prod]="customer-prod" [preview-hotfix]="internal-dev" [hotfix]="internal-dev" [costomer-prod]="customer-prod")
+
+        export RELEASE_BRANCH=$${_RELEASE_BRANCH[$BRANCH_NAME]}
+        echo export RELEASE_BRANCH=$$RELEASE_BRANCH >> /workspace/variables
+
+        curl $$CDN/VERSION?$(date +"%y%m%d%H%M%S%3N") -o VERSION
+        echo "*** VERSION ***"
+        cat VERSION
+
+        curl $$CDN/modules.ver?$(date +"%y%m%d%H%M%S%3N") -o modules.ver
+        echo "*** MODULES ***"
+        cat modules.ver
+
+        export INIT_DIR=(`cat setup.py | grep INIT_DIR | awk -F '=' '/INIT_DIR.*=/ {gsub(/"/, "", $$2); gsub(/ /, "", $$2); gsub(/\x27/, "", $$2); print $$2}'`)
+        echo export INIT_DIR=$$INIT_DIR >> /workspace/variables
+
+        export MODULE_NAME=(`cat setup.py | grep PAKAGE_NAME | awk -F '=' '/PAKAGE_NAME.*=/ {gsub(/"/, "", $$2); gsub(/ /, "", $$2); gsub(/\x27/, "", $$2); print $$2}'`)
+        echo export MODULE_NAME=$$MODULE_NAME >> /workspace/variables
+        echo export BRANCH=$BRANCH_NAME >> /workspace/variables
+
+        RELEASE_VERSION=$(cat VERSION)
+
+        case $BRANCH_NAME in
+          "internal-dev")
+            export VERSION="$${RELEASE_VERSION}.dev0"
+            ;;
+          "internal-test")
+            export VERSION="$${RELEASE_VERSION}a0"
+            ;;
+          "preview-hotfix")
+            export VERSION="$${RELEASE_VERSION}rc0.dev0"
+            ;;
+          "hotfix")
+            export VERSION=(`echo $$RELEASE_VERSION | awk -F. '{$$NF = $$NF + 1;} 1' | sed 's/ /./g'`)
+            ;;
+          "internal-prod")
+            export VERSION="$${RELEASE_VERSION}rc0"
+            ;;
+          "customer-prod")
+            export VERSION=$$RELEASE_VERSION
+            ;;
+          *)
+            echo "$BRANCH_NAME not found"
+            ;;
+        esac
+        echo "__version__ = \"$$VERSION\"" > $$INIT_DIR/_version.py
+        echo export VERSION=$${VERSION} >> /workspace/variables
+
+        cat /workspace/variables
+
+  - name: eu.gcr.io/b2w-master/b2w-cb:dev
+    id: build-package
+    entrypoint: /bin/bash
+    args:
+      - '-c'
+      - |
+        set -e
+
+        source /workspace/variables
+        echo "******** VERSION"
+        cat $$INIT_DIR/_version.py
+
+        echo "******** COMPILE"
+        pip-compile
+        python setup.py sdist bdist_wheel
+
+        gcloud config set core/project $$PROJECT
+        gcloud config set artifacts/repository $$REPOSITORY
+        gcloud config set artifacts/location $$ZONE
+
+        if [ $BRANCH_NAME != customer-prod ]
+        then
+          echo "******** DELETE OLD VERSION"
+          gcloud artifacts versions delete $$VERSION --package=$$MODULE_NAME --location=$$ZONE --repository=$$REPOSITORY --quiet || true
+        fi
+
+        echo "******** UPLOAD PACKAGE"
+        twine upload --verbose --repository-url https://$$ZONE-python.pkg.dev/$$PROJECT/$$REPOSITORY/ dist/*
+        echo "******** END UPLOAD"
+
+  - name: 'eu.gcr.io/b2w-master/b2w-cb:dev'
+    entrypoint: /bin/bash
+    args:
+      - '-c'
+      - |
+        set -e
+        source /workspace/variables
+
+        git clone "git@github.com:bit2win/b2w-release-manager.git" --branch main
+        cd b2w-release-manager/$BRANCH_NAME/packages
+        filename=modules.ver
+
+        if ! grep -R "^[#]*\s*$${MODULE_NAME}=.*" $$filename > /dev/null; then
+          echo "APPENDING because '$${MODULE_NAME}' not found"
+          echo "$$MODULE_NAME=$$VERSION" >> $$filename
+        else
+          echo "SETTING because '$${MODULE_NAME}' found already"
+          sed -ir "s/^[#]*\s*$${MODULE_NAME}=.*/$$MODULE_NAME=$$VERSION/" $filename
+        fi
+
+        if [[ `git status --porcelain` ]]; then
+          git config --global user.name "CI/CD Automation" 
+          git config --global user.email enrico.purificato@bit2win.com 
+          git add --all
+          git commit -m "update package $$MODULE_NAME=$$VERSION"
+          n=0
+          until [ "$n" -ge 5 ]
+          do
+            git pull
+            git push && break
+            n=$((n+1)) 
+            sleep 1
+          done
+        fi

@@ -1,0 +1,82 @@
+# cloud-build-local --config=cb-build-image.yaml --substitutions=BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD),REPO_NAME=$(basename "$PWD"),COMMIT_SHA=$(git rev-parse HEAD) --dryrun=false --push .
+steps:
+  - name: eu.gcr.io/b2w-master/b2w-cb:dev
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        set -e
+
+        declare -A _CDN=([internal-dev]="cdn-int-dev.bit2win.cloud" [internal-test]="cdn-int-test.bit2win.cloud" [internal-prod]="cdn-int-prod.bit2win.cloud" [preview-hotfix]="cdn-preview-hotfix.bit2win.cloud" [hotfix]="cdn-hotfix.bit2win.cloud" [costomer-prod]="cdn.bit2win.cloud")
+        export CDN="https://$${_CDN[$BRANCH_NAME]}"
+        
+        curl $$CDN/VERSION -o VERSION
+        echo "*** VERSION ***"
+        cat VERSION
+
+        curl $$CDN/modules.ver -o modules.ver
+        echo "*** MODULES ***"
+        cat modules.ver
+
+        declare -A _TAG=([internal-dev]="dev" [internal-test]="test" [internal-prod]="RC" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [costomer-prod]="R")
+        declare -A _ENV=([internal-dev]="dev" [internal-test]="test" [internal-prod]="pre-prod" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [costomer-prod]="prod")
+
+        echo export TOPIC="$BRANCH_NAME-deploy-be" > /workspace/variables
+
+        echo export CDN=$$CDN >> /workspace/variables
+
+        export BRANCH=$BRANCH_NAME 
+        echo export BRANCH=$$BRANCH >> /workspace/variables
+              
+        export TAG=$${_TAG[$BRANCH_NAME]}
+        echo export TAG=$$TAG >> /workspace/variables
+
+        export ENV=$${_ENV[$BRANCH_NAME]}
+        echo export ENV=$$ENV >> /workspace/variables
+
+        case $$BRANCH in
+          "internal-prod")
+            export VER=$(cat VERSION).$${_TAG[$BRANCH_NAME]}-$(date +"%y%m%d%H%M")
+            ;;
+          "customer-prod")
+            export VER=$(cat VERSION).$${_TAG[$BRANCH_NAME]}-$(date +"%y%m%d%H%M")
+            ;;
+          *)
+            export VER=$(cat VERSION).$${_TAG[$BRANCH_NAME]}-$(date +"%y%m%d%H%M%S%3N")
+            ;;
+        esac
+
+        echo export VER=$$VER >> /workspace/variables
+        echo export IMAGE=$REPO_NAME-be >> /workspace/variables
+
+        export SECTION=$REPO_NAME
+        echo export SECTION="${SECTION//-/}" >> /workspace/variables
+        echo "*** VARIABLES ***"
+        cat /workspace/variables
+
+  - name: gcr.io/cloud-builders/docker
+    id: docker-build-push
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        set -e
+        source /workspace/variables
+        docker build --build-arg CDN=$$CDN -t eu.gcr.io/b2w-master/$$IMAGE:$$VER .
+        docker push eu.gcr.io/b2w-master/$$IMAGE
+
+  - name: eu.gcr.io/b2w-master/b2w-cb:dev
+    id: pub-sub-publish
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -e
+        source /workspace/variables
+
+        gcloud beta container images add-tag --quiet eu.gcr.io/b2w-master/$$IMAGE:$$VER eu.gcr.io/b2w-master/$$IMAGE:sha_$COMMIT_SHA
+        gcloud beta container images add-tag --quiet eu.gcr.io/b2w-master/$$IMAGE:$$VER eu.gcr.io/b2w-master/$$IMAGE:$$ENV
+        gcloud pubsub topics publish projects/$PROJECT_ID/topics/$$TOPIC \
+        --message="$$IMAGE" --attribute="BUCKET=$$BUCKET,BRANCH=$$BRANCH,TAG=$$TAG,VER=$$VER,IMAGE=$$IMAGE,SECTION=$$SECTION,ENV=$$ENV,SHA=$COMMIT_SHA"
+options:
+  substitution_option: "ALLOW_LOOSE"
