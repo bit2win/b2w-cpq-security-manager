@@ -7,7 +7,7 @@ steps:
       - |
         set -e
 
-        declare -A _CDN=([internal-dev]="cdn-int-dev.bit2win.cloud" [internal-test]="cdn-int-test.bit2win.cloud" [internal-prod]="cdn-int-prod.bit2win.cloud" [preview-hotfix]="cdn-preview-hotfix.bit2win.cloud" [hotfix]="cdn-hotfix.bit2win.cloud" [costomer-prod]="cdn.bit2win.cloud")
+        declare -A _CDN=([internal-dev]="cdn-int-dev.bit2win.cloud" [internal-test]="cdn-int-test.bit2win.cloud" [internal-prod]="cdn-int-prod.bit2win.cloud" [preview-hotfix]="cdn-preview-hotfix.bit2win.cloud" [hotfix]="cdn-hotfix.bit2win.cloud" [customer-prod]="cdn.bit2win.cloud")
         export CDN="https://$${_CDN[$BRANCH_NAME]}"
         
         curl $$CDN/VERSION -o VERSION
@@ -18,8 +18,8 @@ steps:
         echo "*** MODULES ***"
         cat modules.ver
 
-        declare -A _TAG=([internal-dev]="dev" [internal-test]="test" [internal-prod]="RC" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [costomer-prod]="R")
-        declare -A _ENV=([internal-dev]="dev" [internal-test]="test" [internal-prod]="pre-prod" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [costomer-prod]="prod")
+        declare -A _TAG=([internal-dev]="dev" [internal-test]="test" [internal-prod]="RC" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [customer-prod]="R")
+        declare -A _ENV=([internal-dev]="dev" [internal-test]="test" [internal-prod]="pre-prod" [preview-hotfix]="int-hf" [hotfix]="prod-hf" [customer-prod]="prod")
 
         echo export TOPIC="$BRANCH_NAME-deploy-be" > /workspace/variables
 
