@@ -30,7 +30,7 @@ def get_db():
     response_model_exclude_unset=True,
     responses={**responses},
 )
-def test(
+def get_security_policies(
     access_token: str = Header(None, alias=Constants.AUTHORIZATION_HEADER_NAME),
 ):
     try:
