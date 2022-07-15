@@ -63,7 +63,7 @@ steps:
         set -e
         source /workspace/variables
         docker build --build-arg CDN=$$CDN -t eu.gcr.io/b2w-master/$$IMAGE:$$VER .
-        docker push eu.gcr.io/b2w-master/$$IMAGE
+        docker push eu.gcr.io/b2w-master/$$IMAGE:$$VER
 
   - name: eu.gcr.io/b2w-master/b2w-cb:dev
     id: pub-sub-publish
